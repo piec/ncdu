@@ -518,6 +518,10 @@ fn scanDir(ctx: *Context, pat: *const exclude.Patterns, dir: std.fs.IterableDir,
                     }
                 } else |_| {}
             } else |_| {}
+
+            if (edir.?.dir.openFileZ(".no-restic", .{})) |_| {
+                ctx.addSpecial(.excluded);
+            } else |_| {}
         }
 
         ctx.addStat(dir_dev);
