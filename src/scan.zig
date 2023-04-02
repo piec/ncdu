@@ -60,7 +60,7 @@ fn isKernfs(dir: std.fs.Dir, dev: u64) bool {
     if (kernfs_cache.get(dev)) |e| return e;
     var buf: c_statfs.struct_statfs = undefined;
     if (c_statfs.fstatfs(dir.fd, &buf) != 0) return false; // silently ignoring errors isn't too nice.
-    const iskern = switch (buf.f_type) {
+    const iskern = switch (util.castTruncate(u32, buf.f_type)) {
         // These numbers are documented in the Linux 'statfs(2)' man page, so I assume they're stable.
         0x42494e4d, // BINFMTFS_MAGIC
         0xcafe4a11, // BPF_FS_MAGIC
