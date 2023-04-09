@@ -7,6 +7,8 @@ pub fn build(b: *std.build.Builder) void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardReleaseOptions();
 
+    const pie = b.option(bool, "pie", "Build with PIE support (by default false)") orelse false;
+
     const exe = b.addExecutable("ncdu", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
@@ -18,6 +20,7 @@ pub fn build(b: *std.build.Builder) void {
     exe.addCSourceFile("src/ncurses_refs.c", &[_][]const u8{});
     exe.linkLibC();
     exe.linkSystemLibrary("ncursesw");
+    exe.pie = pie;
     exe.install();
 
     const run_cmd = exe.run();
@@ -33,6 +36,7 @@ pub fn build(b: *std.build.Builder) void {
     tst.linkLibC();
     tst.linkSystemLibrary("ncursesw");
     tst.addCSourceFile("src/ncurses_refs.c", &[_][]const u8{});
+    tst.pie = pie;
     const tst_step = b.step("test", "Run tests");
     tst_step.dependOn(&tst.step);
 }
