@@ -24,7 +24,8 @@ pub var cols: u32 = undefined;
 
 pub fn die(comptime fmt: []const u8, args: anytype) noreturn {
     deinit();
-    _ = std.io.getStdErr().writer().print(fmt, args) catch {};
+    const stderr = std.io.getStdErr();
+    stderr.writer().print(fmt, args) catch {};
     std.process.exit(1);
 }
 
@@ -45,7 +46,8 @@ pub fn quit() noreturn {
 pub fn oom() void {
     const haveui = inited;
     deinit();
-    _ = std.io.getStdErr().writer().writeAll("\x1b7\x1b[JOut of memory, trying again in 1 second. Hit Ctrl-C to abort.\x1b8") catch {};
+    const stderr = std.io.getStdErr();
+    stderr.writeAll("\x1b7\x1b[JOut of memory, trying again in 1 second. Hit Ctrl-C to abort.\x1b8") catch {};
     std.time.sleep(std.time.ns_per_s);
     if (haveui)
         init();
@@ -135,7 +137,7 @@ pub fn shorten(in: [:0]const u8, max_width: u32) [:0] const u8 {
         // (The "proper" way is to use mbtowc(), but I'd rather port the musl wcwidth implementation to Zig so that I *know* it'll be Unicode.
         // On the other hand, ncurses also use wcwidth() so that would cause duplicated code. Ugh)
         const cp_width_ = c.wcwidth(cp);
-        const cp_width = @intCast(u32, if (cp_width_ < 0) 0 else cp_width_);
+        const cp_width: u32 = @intCast(if (cp_width_ < 0) 0 else cp_width_);
         const cp_len = std.unicode.utf8CodepointSequenceLength(cp) catch unreachable;
         total_width += cp_width;
         if (!prefix_done and prefix_width + cp_width <= @divFloor(max_width-1, 2)-1) {
@@ -155,7 +157,7 @@ pub fn shorten(in: [:0]const u8, max_width: u32) [:0] const u8 {
     it = std.unicode.Utf8View.initUnchecked(in[prefix_end..]).iterator();
     while (it.nextCodepoint()) |cp| {
         const cp_width_ = c.wcwidth(cp);
-        const cp_width = @intCast(u32, if (cp_width_ < 0) 0 else cp_width_);
+        const cp_width: u32 = @intCast(if (cp_width_ < 0) 0 else cp_width_);
         const cp_len = std.unicode.utf8CodepointSequenceLength(cp) catch unreachable;
         start_width += cp_width;
         start_len += cp_len;
@@ -197,7 +199,6 @@ extern fn ncdu_acs_urcorner() c.chtype;
 extern fn ncdu_acs_lrcorner() c.chtype;
 extern fn ncdu_acs_hline()    c.chtype;
 extern fn ncdu_acs_vline()    c.chtype;
-extern fn ncdu_init_pair(idx: c_int, fg: c_int, bg: c_int) void;
 
 const StyleAttr = struct { fg: i16, bg: i16, attr: u32 };
 const StyleDef = struct {
@@ -286,20 +287,18 @@ const styles = [_]StyleDef{
 };
 
 pub const Style = lbl: {
-    var fields: [styles.len]std.builtin.Type.EnumField = undefined;
-    var decls = [_]std.builtin.Type.Declaration{};
-    inline for (styles) |s, i| {
-        fields[i] = .{
+    comptime var fields: [styles.len]std.builtin.Type.EnumField = undefined;
+    inline for (&fields, styles, 0..) |*field, s, i| {
+        field.* = .{
             .name = s.name,
             .value = i,
         };
     }
     break :lbl @Type(.{
         .Enum = .{
-            .layout = .Auto,
             .tag_type = u8,
             .fields = &fields,
-            .decls = &decls,
+            .decls = &[_]std.builtin.Type.Declaration{},
             .is_exhaustive = true,
         }
     });
@@ -336,14 +335,15 @@ pub const Bg = enum {
 
 fn updateSize() void {
     // getmax[yx] macros are marked as "legacy", but Zig can't deal with the "proper" getmaxyx macro.
-    rows = @intCast(u32, c.getmaxy(c.stdscr));
-    cols = @intCast(u32, c.getmaxx(c.stdscr));
+    rows = @intCast(c.getmaxy(c.stdscr));
+    cols = @intCast(c.getmaxx(c.stdscr));
 }
 
 fn clearScr() void {
     // Send a "clear from cursor to end of screen" instruction, to clear a
     // potential line left behind from scanning in -1 mode.
-    _ = std.io.getStdErr().write("\x1b[J") catch {};
+    const stderr = std.io.getStdErr();
+    stderr.writeAll("\x1b[J") catch {};
 }
 
 pub fn init() void {
@@ -351,7 +351,7 @@ pub fn init() void {
     clearScr();
     if (main.config.nc_tty) {
         var tty = c.fopen("/dev/tty", "r+");
-        if (tty == null) die("Error opening /dev/tty: {s}.\n", .{ c.strerror(@enumToInt(std.c.getErrno(-1))) });
+        if (tty == null) die("Error opening /dev/tty: {s}.\n", .{ c.strerror(@intFromEnum(std.c.getErrno(-1))) });
         var term = c.newterm(null, tty, tty);
         if (term == null) die("Error initializing ncurses.\n", .{});
         _ = c.set_term(term);
@@ -366,9 +366,8 @@ pub fn init() void {
 
     _ = c.start_color();
     _ = c.use_default_colors();
-    for (styles) |s, i| _ = ncdu_init_pair(@intCast(i16, i+1), s.style().fg, s.style().bg);
-    _ = c.bkgd(@intCast(c.chtype, c.COLOR_PAIR(@enumToInt(Style.default)+1)));
-
+    for (styles, 0..) |s, i| _ = c.init_pair(@as(i16, @intCast(i+1)), s.style().fg, s.style().bg);
+    _ = c.bkgd(@intCast(c.COLOR_PAIR(@intFromEnum(Style.default)+1)));
     inited = true;
 }
 
@@ -384,11 +383,11 @@ pub fn deinit() void {
 }
 
 pub fn style(s: Style) void {
-    _ = c.attr_set(styles[@enumToInt(s)].style().attr, @enumToInt(s)+1, null);
+    _ = c.attr_set(styles[@intFromEnum(s)].style().attr, @intFromEnum(s)+1, null);
 }
 
 pub fn move(y: u32, x: u32) void {
-    _ = c.move(@intCast(i32, y), @intCast(i32, x));
+    _ = c.move(@as(i32, @intCast(y)), @as(i32, @intCast(x)));
 }
 
 // Wraps to the next line if the text overflows, not sure how to disable that.
@@ -419,7 +418,7 @@ pub const FmtSize = struct {
 
     pub fn fmt(v: u64) @This() {
         var r: @This() = undefined;
-        var f = @intToFloat(f32, v);
+        var f: f32 = @floatFromInt(v);
         if (main.config.si) {
             if(f < 1000.0)    { r.unit = "  B"; }
             else if(f < 1e6)  { r.unit = " KB"; f /= 1e3;  }
@@ -464,7 +463,7 @@ pub fn addnum(bg: Bg, v: u64) void {
     const s = std.fmt.bufPrint(&buf, "{d}", .{v}) catch unreachable;
     var f: [64:0]u8 = undefined;
     var i: usize = 0;
-    for (s) |digit, n| {
+    for (s, 0..) |digit, n| {
         if (n != 0 and (s.len - n) % 3 == 0) {
             for (main.config.thousands_sep) |ch| {
                 f[i] = ch;
@@ -518,7 +517,7 @@ pub fn addts(bg: Bg, ts: u64) void {
 }
 
 pub fn hline(ch: c.chtype, len: u32) void {
-    _ = c.hline(ch, @intCast(i32, len));
+    _ = c.hline(ch, @as(i32, @intCast(len)));
 }
 
 // Draws a bordered box in the center of the screen.
@@ -586,20 +585,19 @@ pub fn getch(block: bool) i32 {
     // In non-blocking mode, we can only assume that ERR means "no input yet".
     // In blocking mode, give it 100 tries with a 10ms delay in between,
     // then just give up and die to avoid an infinite loop and unresponsive program.
-    var attempts: u8 = 0;
-    while (attempts < 100) : (attempts += 1) {
-        var ch = c.getch();
+    for (0..100) |_| {
+        const ch = c.getch();
         if (ch == c.KEY_RESIZE) {
             updateSize();
             return -1;
         }
         if (ch == c.ERR) {
             if (!block) return 0;
-            std.os.nanosleep(0, 10*std.time.ns_per_ms);
+            std.time.sleep(10*std.time.ns_per_ms);
             continue;
         }
         return ch;
     }
     die("Error reading keyboard input, assuming TTY has been lost.\n(Potentially nonsensical error message: {s})\n",
-        .{ c.strerror(@enumToInt(std.c.getErrno(-1))) });
+        .{ c.strerror(@intFromEnum(std.c.getErrno(-1))) });
 }

@@ -44,15 +44,15 @@ const View = struct {
     fn save(self: *@This()) void {
         self.cursor_hash = if (dir_items.items.len == 0) 0
                            else hashEntry(dir_items.items[cursor_idx]);
-        opened_dir_views.put(@ptrToInt(dir_parent), self.*) catch {};
+        opened_dir_views.put(@intFromPtr(dir_parent), self.*) catch {};
     }
 
     // Should be called after dir_parent or dir_items has changed, will load the last saved view and find the proper cursor_idx.
     fn load(self: *@This(), sel: ?*const model.Entry) void {
-        if (opened_dir_views.get(@ptrToInt(dir_parent))) |v| self.* = v
+        if (opened_dir_views.get(@intFromPtr(dir_parent))) |v| self.* = v
         else self.* = @This(){};
         cursor_idx = 0;
-        for (dir_items.items) |e, i| {
+        for (dir_items.items, 0..) |e, i| {
             if (if (sel != null) e == sel else self.cursor_hash == hashEntry(e)) {
                 cursor_idx = i;
                 break;
@@ -64,7 +64,7 @@ const View = struct {
 var current_view = View{};
 
 // Directories the user has browsed to before, and which item was last selected.
-// The key is the @ptrToInt() of the opened *Dir; An int because the pointer
+// The key is the @intFromPtr() of the opened *Dir; An int because the pointer
 // itself may have gone stale after deletion or refreshing. They're only for
 // lookups, not dereferencing.
 var opened_dir_views = std.AutoHashMap(usize, View).init(main.allocator);
@@ -117,7 +117,7 @@ fn sortDir(next_sel: ?*const model.Entry) void {
     // No need to sort the first item if that's the parent dir reference,
     // excluding that allows sortLt() to ignore null values.
     const lst = dir_items.items[(if (dir_items.items.len > 0 and dir_items.items[0] == null) @as(usize, 1) else 0)..];
-    std.sort.sort(?*model.Entry, lst, @as(void, undefined), sortLt);
+    std.mem.sort(?*model.Entry, lst, {}, sortLt);
     current_view.load(next_sel);
 }
 
@@ -134,7 +134,7 @@ pub fn loadDir(next_sel: ?*const model.Entry) void {
     if (dir_parent != model.root)
         dir_items.append(null) catch unreachable;
     var it = dir_parent.sub;
-    while (it) |e| {
+    while (it) |e| : (it = e.next) {
         if (e.pack.blocks > dir_max_blocks) dir_max_blocks = e.pack.blocks;
         if (e.size > dir_max_size) dir_max_size = e.size;
         const shown = main.config.show_hidden or blk: {
@@ -146,7 +146,6 @@ pub fn loadDir(next_sel: ?*const model.Entry) void {
             dir_items.append(e) catch unreachable;
             if (e.dir()) |d| if (d.shared_blocks > 0 or d.shared_size > 0) { dir_has_shared = true; };
         }
-        it = e.next;
     }
     sortDir(next_sel);
 }
@@ -203,7 +202,7 @@ const Row = struct {
     fn graph(self: *Self) void {
         if ((!main.config.show_graph and !main.config.show_percent) or self.col + 20 > ui.cols) return;
 
-        const bar_size = std.math.max(ui.cols/7, 10);
+        const bar_size = @max(ui.cols/7, 10);
         defer self.col += 3
             + (if (main.config.show_graph) bar_size else 0)
             + (if (main.config.show_percent) @as(u32, 6) else 0)
@@ -216,8 +215,8 @@ const Row = struct {
         if (main.config.show_percent) {
             self.bg.fg(.num);
             ui.addprint("{d:>5.1}", .{ 100 *
-                if (main.config.show_blocks) @intToFloat(f32, item.pack.blocks) / @intToFloat(f32, std.math.max(1, dir_parent.entry.pack.blocks))
-                else                         @intToFloat(f32, item.size)        / @intToFloat(f32, std.math.max(1, dir_parent.entry.size))
+                if (main.config.show_blocks) @as(f32, @floatFromInt(item.pack.blocks)) / @as(f32, @floatFromInt(@max(1, dir_parent.entry.pack.blocks)))
+                else                         @as(f32, @floatFromInt(item.size))        / @as(f32, @floatFromInt(@max(1, dir_parent.entry.size)))
             });
             self.bg.fg(.default);
             ui.addch('%');
@@ -230,11 +229,11 @@ const Row = struct {
                 max *= bar_size;
                 num *= bar_size;
             }
+           
             const perblock = std.math.divFloor(u64, max, bar_size) catch unreachable;
-            var i: u32 = 0;
             self.bg.fg(.graph);
-            while (i < bar_size) : (i += 1) {
-                const frac = std.math.min(@as(usize, 8), (num *| 8) / perblock);
+            for (0..bar_size) |_| {
+                const frac = @min(@as(usize, 8), (num *| 8) / perblock);
                 ui.addstr(switch (main.config.graph_style) {
                     .hash  => ([_][:0]const u8{ " ", " ", " ", " ", " ", " ", " ", " ", "#" })[frac],
                     .half  => ([_][:0]const u8{ " ", " ", " ", " ", "▌", "▌", "▌", "▌", "█" })[frac],
@@ -261,11 +260,11 @@ const Row = struct {
         } else if (n < 100_000)
             ui.addnum(self.bg, n)
         else if (n < 1000_000) {
-            ui.addprint("{d:>5.1}", .{ @intToFloat(f32, n) / 1000 });
+            ui.addprint("{d:>5.1}", .{ @as(f32, @floatFromInt(n)) / 1000 });
             self.bg.fg(.default);
             ui.addch('k');
         } else if (n < 1000_000_000) {
-            ui.addprint("{d:>5.1}", .{ @intToFloat(f32, n) / 1000_000 });
+            ui.addprint("{d:>5.1}", .{ @as(f32, @floatFromInt(n)) / 1000_000 });
             self.bg.fg(.default);
             ui.addch('M');
         } else {
@@ -384,8 +383,8 @@ const info = struct {
             // TODO: Zig's sort() implementation is type-generic and not very
             // small. I suspect we can get a good save on our binary size by using
             // a smaller or non-generic sort. This doesn't have to be very fast.
-            std.sort.sort(*model.Link, list.items, @as(void, undefined), lt);
-            for (list.items) |n,i| if (&n.entry == e) { links_idx = i; };
+            std.mem.sort(*model.Link, list.items, {}, lt);
+            for (list.items, 0..) |n,i| if (&n.entry == e) { links_idx = i; };
             links = list;
         }
     }
@@ -395,8 +394,7 @@ const info = struct {
         if (links_idx < links_top) links_top = links_idx;
         if (links_idx >= links_top + numrows) links_top = links_idx - numrows + 1;
 
-        var i: u32 = 0;
-        while (i < numrows) : (i += 1) {
+        for (0..numrows) |i| {
             if (i + links_top >= links.?.items.len) break;
             const e = links.?.items[i+links_top];
             ui.style(if (i+links_top == links_idx) .sel else .default);
@@ -625,7 +623,7 @@ const help = struct {
         var i = offset*2;
         while (i < (offset + keylines)*2) : (i += 2) {
             line += 1;
-            box.move(line, 13 - @intCast(u32, keys[i].len));
+            box.move(line, 13 - @as(u32, @intCast(keys[i].len)));
             ui.style(.key);
             ui.addstr(keys[i]);
             ui.style(.default);
@@ -657,15 +655,12 @@ const help = struct {
     }
 
     fn drawAbout(box: ui.Box) void {
-        for (logo) |s, n| {
-            box.move(@intCast(u32, n)+3, 12);
+        for (logo, 0..) |s, n| {
+            box.move(@as(u32, @intCast(n+3)), 12);
             var i: u5 = 28;
-            while (true) {
+            while (i != 0) : (i -= 1) {
                 ui.style(if (s & (@as(u29,1)<<i) > 0) .sel else .default);
                 ui.addch(' ');
-                if (i == 0)
-                    break;
-                i -= 1;
             }
         }
         ui.style(.default);
@@ -823,7 +818,7 @@ fn keyInputSelection(ch: i32, idx: *usize, len: usize, page: u32) bool {
         ui.c.KEY_HOME => idx.* = 0,
         ui.c.KEY_END, ui.c.KEY_LL => idx.* = len -| 1,
         ui.c.KEY_PPAGE => idx.* = idx.* -| page,
-        ui.c.KEY_NPAGE => idx.* = std.math.min(len -| 1, idx.* + page),
+        ui.c.KEY_NPAGE => idx.* = @min(len -| 1, idx.* + page),
         else => return false,
     }
     return true;

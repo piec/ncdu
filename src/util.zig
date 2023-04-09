@@ -11,7 +11,7 @@ pub fn castClamp(comptime T: type, x: anytype) T {
     } else if (std.math.minInt(@TypeOf(x)) < std.math.minInt(T) and x < std.math.minInt(T)) {
         return std.math.minInt(T);
     } else {
-        return @intCast(T, x);
+        return @intCast(x);
     }
 }
 
@@ -19,13 +19,13 @@ pub fn castClamp(comptime T: type, x: anytype) T {
 pub fn castTruncate(comptime T: type, x: anytype) T {
     const Ti = @typeInfo(T).Int;
     const Xi = @typeInfo(@TypeOf(x)).Int;
-    const nx = if (Xi.signedness != Ti.signedness) @bitCast(std.meta.Int(Ti.signedness, Xi.bits), x) else x;
-    return if (Xi.bits > Ti.bits) @truncate(T, nx) else nx;
+    const nx: std.meta.Int(Ti.signedness, Xi.bits) = @bitCast(x);
+    return if (Xi.bits > Ti.bits) @truncate(nx) else nx;
 }
 
 // Multiplies by 512, saturating.
 pub fn blocksToSize(b: u64) u64 {
-    return if (b & 0xFF80000000000000 > 0) std.math.maxInt(u64) else b << 9;
+    return b *| 512;
 }
 
 // Ensure the given arraylist buffer gets zero-terminated and returns a slice
@@ -44,8 +44,8 @@ pub fn strnatcmp(a: [:0]const u8, b: [:0]const u8) std.math.Order {
     var bi: usize = 0;
     const isDigit = std.ascii.isDigit;
     while (true) {
-        while (std.ascii.isSpace(a[ai])) ai += 1;
-        while (std.ascii.isSpace(b[bi])) bi += 1;
+        while (std.ascii.isWhitespace(a[ai])) ai += 1;
+        while (std.ascii.isWhitespace(b[bi])) bi += 1;
 
         if (isDigit(a[ai]) and isDigit(b[bi])) {
             if (a[ai] == '0' or b[bi] == '0') { // compare_left
@@ -133,12 +133,9 @@ test "strnatcmp" {
     };
     // Test each string against each other string, simple and thorough.
     const eq = std.testing.expectEqual;
-    var i: usize = 0;
-    while (i < w.len) : (i += 1) {
-        var j: usize = 0;
+    for (0..w.len) |i| {
         try eq(strnatcmp(w[i], w[i]), .eq);
-        while (j < i) : (j += 1) try eq(strnatcmp(w[i], w[j]), .gt);
-        j += 1;
-        while (j < w.len) : (j += 1) try eq(strnatcmp(w[i], w[j]), .lt);
+        for (0..i) |j| try eq(strnatcmp(w[i], w[j]), .gt);
+        for (i+1..w.len) |j| try eq(strnatcmp(w[i], w[j]), .lt);
     }
 }

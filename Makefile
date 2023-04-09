@@ -9,7 +9,7 @@ ZIG ?= zig
 PREFIX ?= /usr/local
 BINDIR ?= ${PREFIX}/bin
 MANDIR ?= ${PREFIX}/share/man/man1
-ZIG_FLAGS ?= -Drelease-fast
+ZIG_FLAGS ?= -Doptimize=ReleaseFast
 
 NCDU_VERSION=$(shell grep 'program_version = "' src/main.zig | sed -e 's/^.*"\(.\+\)".*$$/\1/')
 
@@ -80,7 +80,7 @@ static-%.tar.gz:
 	@# Alternative approach, bypassing zig-build
 	cd static-$* && zig build-exe -target $*\
 		-Iinst/include -Iinst/include/ncursesw -lc inst/lib/libncursesw.a\
-		--cache-dir zig-cache -static --strip -O ReleaseFast ../src/main.zig ../src/ncurses_refs.c
+		--cache-dir zig-cache -static -fstrip -O ReleaseFast ../src/main.zig ../src/ncurses_refs.c
 	cd static-$* && mv main ncdu && tar -czf ../static-$*.tar.gz ncdu
 	rm -rf static-$*
 

@@ -50,15 +50,15 @@ pub const Entry = extern struct {
     const Self = @This();
 
     pub fn dir(self: *Self) ?*Dir {
-        return if (self.pack.etype == .dir) @ptrCast(*Dir, self) else null;
+        return if (self.pack.etype == .dir) @ptrCast(self) else null;
     }
 
     pub fn link(self: *Self) ?*Link {
-        return if (self.pack.etype == .link) @ptrCast(*Link, self) else null;
+        return if (self.pack.etype == .link) @ptrCast(self) else null;
     }
 
     pub fn file(self: *Self) ?*File {
-        return if (self.pack.etype == .file) @ptrCast(*File, self) else null;
+        return if (self.pack.etype == .file) @ptrCast(self) else null;
     }
 
     // Whether this entry should be displayed as a "directory".
@@ -68,17 +68,18 @@ pub const Entry = extern struct {
     }
 
     pub fn name(self: *const Self) [:0]const u8 {
-        const ptr = switch (self.pack.etype) {
-            .dir => &@ptrCast(*const Dir, self).name,
-            .link => &@ptrCast(*const Link, self).name,
-            .file => &@ptrCast(*const File, self).name,
+        const self_name = switch (self.pack.etype) {
+            .dir => &@as(*const Dir, @ptrCast(self)).name,
+            .link => &@as(*const Link, @ptrCast(self)).name,
+            .file => &@as(*const File, @ptrCast(self)).name,
         };
-        return std.mem.sliceTo(@ptrCast([*:0]const u8, ptr), 0);
+        const name_ptr: [*:0]const u8 = @ptrCast(self_name);
+        return std.mem.sliceTo(name_ptr, 0);
     }
 
     pub fn ext(self: *Self) ?*Ext {
         if (!self.pack.isext) return null;
-        return @ptrCast(*Ext, @ptrCast([*]Ext, self) - 1);
+        return @ptrCast(@as([*]Ext, @ptrCast(self)) - 1);
     }
 
     fn alloc(comptime T: type, etype: EType, isext: bool, ename: []const u8) *Entry {
@@ -89,13 +90,13 @@ pub const Entry = extern struct {
             ui.oom();
         };
         if (isext) {
-            @ptrCast(*Ext, ptr).* = .{};
+            @as(*Ext, @ptrCast(ptr)).* = .{};
             ptr = ptr[@sizeOf(Ext)..];
         }
-        const e = @ptrCast(*T, ptr);
+        const e: *T = @ptrCast(ptr);
         e.* = .{ .entry = .{ .pack = .{ .etype = etype, .isext = isext } } };
-        const n = @ptrCast([*]u8, &e.name)[0..ename.len+1];
-        std.mem.copy(u8, n, ename);
+        const n = @as([*]u8, @ptrCast(&e.name))[0..ename.len+1];
+        @memcpy(n[0..ename.len], ename);
         n[ename.len] = 0;
         return &e.entry;
     }
@@ -320,7 +321,7 @@ pub const devices = struct {
     pub fn getId(dev: u64) DevId {
         var d = lookup.getOrPut(dev) catch unreachable;
         if (!d.found_existing) {
-            d.value_ptr.* = @intCast(DevId, list.items.len);
+            d.value_ptr.* = @as(DevId, @intCast(list.items.len));
             list.append(dev) catch unreachable;
         }
         return d.value_ptr.*;

@@ -13,15 +13,25 @@ const util = @import("util.zig");
 const exclude = @import("exclude.zig");
 const c = @cImport(@cInclude("locale.h"));
 
+test "imports" {
+    _ = model;
+    _ = scan;
+    _ = ui;
+    _ = browser;
+    _ = delete;
+    _ = util;
+    _ = exclude;
+}
+
 // "Custom" allocator that wraps the libc allocator and calls ui.oom() on error.
 // This allocator never returns an error, it either succeeds or causes ncdu to quit.
 // (Which means you'll find a lot of "catch unreachable" sprinkled through the code,
 // they look scarier than they are)
-fn wrapAlloc(_: *anyopaque, len: usize, alignment: u29, len_align: u29, return_address: usize) error{OutOfMemory}![]u8 {
+fn wrapAlloc(_: *anyopaque, len: usize, ptr_alignment: u8, return_address: usize) ?[*]u8 {
     while (true) {
-        if (std.heap.c_allocator.vtable.alloc(undefined, len, alignment, len_align, return_address)) |r|
+        if (std.heap.c_allocator.vtable.alloc(undefined, len, ptr_alignment, return_address)) |r|
             return r
-        else |_| {}
+        else {}
         ui.oom();
     }
 }
@@ -264,19 +274,26 @@ fn tryReadArgsFile(path: [:0]const u8) void {
     defer f.close();
 
     var arglist = std.ArrayList([:0]const u8).init(allocator);
+    
     var rd_ = std.io.bufferedReader(f.reader());
-    var rd = rd_.reader();
-    var linebuf: [4096]u8 = undefined;
+    const rd = rd_.reader();
+    
+    var line_buf: [4096]u8 = undefined;
+    var line_fbs = std.io.fixedBufferStream(&line_buf);
+    const line_writer = line_fbs.writer();
 
-    while (
-        rd.readUntilDelimiterOrEof(&linebuf, '\n')
-            catch |e| ui.die("Error reading from {s}: {s}\nRun with --ignore-config to skip reading config files.\n", .{ path, ui.errorString(e) })
-    ) |line_| {
-        var line = std.mem.trim(u8, line_, &std.ascii.spaces);
+    while (true) : (line_fbs.reset()) {
+        rd.streamUntilDelimiter(line_writer, '\n', line_buf.len) catch |err| switch (err) {
+            error.EndOfStream => if (line_fbs.getPos() catch unreachable == 0) break,
+            else => |e| ui.die("Error reading from {s}: {s}\nRun with --ignore-config to skip reading config files.\n", .{ path, ui.errorString(e) }),
+        };
+        var line_ = line_fbs.getWritten();
+
+        var line = std.mem.trim(u8, line_, &std.ascii.whitespace);
         if (line.len == 0 or line[0] == '#') continue;
         if (std.mem.indexOfAny(u8, line, " \t=")) |i| {
             arglist.append(allocator.dupeZ(u8, line[0..i]) catch unreachable) catch unreachable;
-            line = std.mem.trimLeft(u8, line[i+1..], &std.ascii.spaces);
+            line = std.mem.trimLeft(u8, line[i+1..], &std.ascii.whitespace);
         }
         arglist.append(allocator.dupeZ(u8, line) catch unreachable) catch unreachable;
     }
@@ -291,12 +308,14 @@ fn tryReadArgsFile(path: [:0]const u8) void {
 }
 
 fn version() noreturn {
-    std.io.getStdOut().writer().writeAll("ncdu " ++ program_version ++ "\n") catch {};
+    const stdout = std.io.getStdOut();
+    stdout.writeAll("ncdu " ++ program_version ++ "\n") catch {};
     std.process.exit(0);
 }
 
 fn help() noreturn {
-    std.io.getStdOut().writer().writeAll(
+    const stdout = std.io.getStdOut();
+    stdout.writeAll(
     \\ncdu <options> <directory>
     \\
     \\Options:
@@ -339,7 +358,7 @@ fn spawnShell() void {
     // NCDU_LEVEL can only count to 9, keeps the implementation simple.
     if (env.get("NCDU_LEVEL")) |l|
         env.put("NCDU_LEVEL", if (l.len == 0) "1" else switch (l[0]) {
-            '0'...'8' => @as([]const u8, &.{l[0]+1}),
+            '0'...'8' => |d| &[1] u8{d+1},
             '9' => "9",
             else => "1"
         }) catch unreachable
@@ -347,17 +366,19 @@ fn spawnShell() void {
         env.put("NCDU_LEVEL", "1") catch unreachable;
 
     const shell = std.os.getenvZ("NCDU_SHELL") orelse std.os.getenvZ("SHELL") orelse "/bin/sh";
-    var child = std.ChildProcess.init(&.{shell}, allocator);
+    var child = std.process.Child.init(&.{shell}, allocator);
     child.cwd = path.items;
     child.env_map = &env;
 
+    const stdin = std.io.getStdIn();
+    const stderr = std.io.getStdErr();
     const term = child.spawnAndWait() catch |e| blk: {
-        _ = std.io.getStdErr().writer().print(
+        stderr.writer().print(
             "Error spawning shell: {s}\n\nPress enter to continue.\n",
             .{ ui.errorString(e) }
         ) catch {};
-        _ = std.io.getStdIn().reader().skipUntilDelimiterOrEof('\n') catch unreachable;
-        break :blk std.ChildProcess.Term{ .Exited = 0 };
+        stdin.reader().skipUntilDelimiterOrEof('\n') catch unreachable;
+        break :blk std.process.Child.Term{ .Exited = 0 };
     };
     if (term != .Exited) {
         const n = switch (term) {
@@ -372,10 +393,10 @@ fn spawnShell() void {
             .Stopped => |v| v,
             .Unknown => |v| v,
         };
-        _ = std.io.getStdErr().writer().print(
+        stderr.writer().print(
             "Shell returned with {s} code {}.\n\nPress enter to continue.\n", .{ n, v }
         ) catch {};
-        _ = std.io.getStdIn().reader().skipUntilDelimiterOrEof('\n') catch unreachable;
+        stdin.reader().skipUntilDelimiterOrEof('\n') catch unreachable;
     }
 }
 
@@ -383,15 +404,22 @@ fn spawnShell() void {
 fn readExcludeFile(path: [:0]const u8) !void {
     const f = try std.fs.cwd().openFileZ(path, .{});
     defer f.close();
+
     var rd_ = std.io.bufferedReader(f.reader());
-    var rd = rd_.reader();
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
-    while (true) {
-        rd.readUntilDelimiterArrayList(&buf, '\n', 4096)
-            catch |e| if (e != error.EndOfStream) return e else if (buf.items.len == 0) break;
-        if (buf.items.len > 0)
-            exclude.addPattern(util.arrayListBufZ(&buf));
+    const rd = rd_.reader();
+
+    var line_buf: [4096]u8 = undefined;
+    var line_fbs = std.io.fixedBufferStream(&line_buf);
+    const line_writer = line_fbs.writer();
+
+    while (true) : (line_fbs.reset()) {
+        rd.streamUntilDelimiter(line_writer, '\n', line_buf.len) catch |err| switch (err) {
+            error.EndOfStream => if (line_fbs.getPos() catch unreachable == 0) break,
+            else => |e| return e,
+        };
+        const line = line_fbs.getWritten();
+        if (line.len > 0)
+            exclude.addPattern(line);
     }
 }
 
@@ -459,8 +487,10 @@ pub fn main() void {
     if (@import("builtin").os.tag != .linux and config.exclude_kernfs)
         ui.die("The --exclude-kernfs flag is currently only supported on Linux.\n", .{});
 
-    const out_tty = std.io.getStdOut().isTty();
-    const in_tty = std.io.getStdIn().isTty();
+    const stdin = std.io.getStdIn();
+    const stdout = std.io.getStdOut();
+    const out_tty = stdout.isTty();
+    const in_tty = stdin.isTty();
     if (config.scan_ui == null) {
         if (export_file) |f| {
             if (!out_tty or std.mem.eql(u8, f, "-")) config.scan_ui = .none
@@ -475,7 +505,7 @@ pub fn main() void {
     defer ui.deinit();
 
     var out_file = if (export_file) |f| (
-        if (std.mem.eql(u8, f, "-")) std.io.getStdOut()
+        if (std.mem.eql(u8, f, "-")) stdout
         else std.fs.cwd().createFileZ(f, .{})
              catch |e| ui.die("Error opening export file: {s}.\n", .{ui.errorString(e)})
     ) else null;
@@ -552,13 +582,6 @@ pub fn handleEvent(block: bool, force_draw: bool) void {
         }
         firstblock = false;
     }
-}
-
-test "imports" {
-    _ = @import("model.zig");
-    _ = @import("ui.zig");
-    _ = @import("util.zig");
-    _ = @import("exclude.zig");
 }
 
 test "argument parser" {

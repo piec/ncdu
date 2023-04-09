@@ -23,12 +23,12 @@ const Stat = struct {
     symlink: bool = false,
     ext: model.Ext = .{},
 
-    fn clamp(comptime T: type, comptime field: anytype, x: anytype) std.meta.fieldInfo(T, field).field_type {
-        return util.castClamp(std.meta.fieldInfo(T, field).field_type, x);
+    fn clamp(comptime T: type, comptime field: anytype, x: anytype) std.meta.fieldInfo(T, field).type {
+        return util.castClamp(std.meta.fieldInfo(T, field).type, x);
     }
 
-    fn truncate(comptime T: type, comptime field: anytype, x: anytype) std.meta.fieldInfo(T, field).field_type {
-        return util.castTruncate(std.meta.fieldInfo(T, field).field_type, x);
+    fn truncate(comptime T: type, comptime field: anytype, x: anytype) std.meta.fieldInfo(T, field).type {
+        return util.castTruncate(std.meta.fieldInfo(T, field).type, x);
     }
 
     fn read(parent: std.fs.Dir, name: [:0]const u8, follow: bool) !Stat {
@@ -787,7 +787,7 @@ const Import = struct {
             },
             'd' => {
                 if (eq(u8, key, "dsize")) {
-                    self.ctx.stat.blocks = @intCast(model.Blocks, self.uint(u64)>>9);
+                    self.ctx.stat.blocks = @intCast(self.uint(u64)>>9);
                     return;
                 }
                 if (eq(u8, key, "dev")) {
@@ -968,7 +968,7 @@ const Import = struct {
 };
 
 pub fn importRoot(path: [:0]const u8, out: ?std.fs.File) void {
-    var fd = if (std.mem.eql(u8, "-", path)) std.io.getStdIn()
+    const fd = if (std.mem.eql(u8, "-", path)) std.io.getStdIn()
              else std.fs.cwd().openFileZ(path, .{})
                   catch |e| ui.die("Error reading file: {s}.\n", .{ui.errorString(e)});
     defer fd.close();
@@ -1060,9 +1060,8 @@ fn drawBox() void {
         animation_pos += 1;
         if (animation_pos >= txt.len*2) animation_pos = 0;
         if (animation_pos < txt.len) {
-            var i: u32 = 0;
             box.move(8, 2);
-            while (i <= animation_pos) : (i += 1) ui.addch(txt[i]);
+            for (txt[0..animation_pos + 1]) |t| ui.addch(t);
         } else {
             var i: u32 = txt.len-1;
             while (i > animation_pos-txt.len) : (i -= 1) {
@@ -1093,7 +1092,8 @@ pub fn draw() void {
                     .{ ui.shorten(active_context.pathZ(), 51), active_context.items_seen, r.num(), r.unit }
                 ) catch return;
             }
-            _ = std.io.getStdErr().write(line) catch {};
+            const stderr = std.io.getStdErr();
+            stderr.writeAll(line) catch {};
         },
         .full => drawBox(),
     }
